@@ -25,23 +25,24 @@ public class DiagnosticEngine {
 
     public FailureReport analyzeFailure(String stackTrace) {
         List<Document> relevantDocs = retrievalService.findMatchingRunbooks(stackTrace);
-        
+
         String context = relevantDocs.isEmpty() ? "No prior runbook matches found." :
                 relevantDocs.stream()
-                        .map(Document::getContent)
-                        .collect(Collectors.joining("\n---\n"));
+                .map(Document::getText)
+                .collect(Collectors.joining("\n---\n"));
 
         BeanOutputConverter<FailureReport> parser = new BeanOutputConverter<>(FailureReport.class);
 
         String promptString = """
                 You are a Senior Site Reliability Engineer (SRE).
                 Analyze the following CI/CD failure log and contextual historical runbooks to determine root cause.
-                
+
                 LOG EXCERPT:
                 {log}
+
                 RELEVANT RUNBOOKS & HISTORICAL INCIDENTS:
                 {context}
-                
+
                 {format}
                 """;
 
@@ -53,7 +54,7 @@ public class DiagnosticEngine {
         ));
 
         try {
-            String rawResponse = chatModel.call(prompt).getResult().getOutput().getContent();
+            String rawResponse = chatModel.call(prompt).getResult().getOutput().getText();
             return parser.convert(rawResponse);
         } catch (Exception e) {
             log.error("Error invoking LLM or parsing output schema", e);

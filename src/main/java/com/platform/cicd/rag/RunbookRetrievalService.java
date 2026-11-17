@@ -25,9 +25,11 @@ public class RunbookRetrievalService {
         try {
             log.info("Executing vector similarity search against runbook knowledge base");
             return vectorStore.similaritySearch(
-                    SearchRequest.query(stackTrace)
-                            .withTopK(3)
-                            .withSimilarityThreshold(0.65)
+                    SearchRequest.builder()
+                            .query(stackTrace)
+                            .topK(3)
+                            .similarityThreshold(0.65)
+                            .build()
             );
         } catch (Exception e) {
             log.error("Failed to perform vector similarity search", e);
