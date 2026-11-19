@@ -23,13 +23,14 @@ public class DiagnosticEngine {
     private final ChatModel chatModel;
     private final RunbookRetrievalService retrievalService;
 
-    public FailureReport analyzeFailure(String stackTrace) {
+    public FailureReport analyzeFailure(String rawStackTrace) {
+        String stackTrace = rawStackTrace == null ? "" : rawStackTrace;
         List<Document> relevantDocs = retrievalService.findMatchingRunbooks(stackTrace);
 
         String context = relevantDocs.isEmpty() ? "No prior runbook matches found." :
                 relevantDocs.stream()
-                .map(Document::getText)
-                .collect(Collectors.joining("\n---\n"));
+                        .map(Document::getText)
+                        .collect(Collectors.joining("\n---\n"));
 
         BeanOutputConverter<FailureReport> parser = new BeanOutputConverter<>(FailureReport.class);
 
@@ -55,7 +56,11 @@ public class DiagnosticEngine {
 
         try {
             String rawResponse = chatModel.call(prompt).getResult().getOutput().getText();
-            return parser.convert(rawResponse);
+            FailureReport report = parser.convert(rawResponse);
+            if (report == null) {
+                throw new IllegalStateException("LLM returned an empty or unparseable report");
+            }
+            return report;
         } catch (Exception e) {
             log.error("Error invoking LLM or parsing output schema", e);
             return new FailureReport(

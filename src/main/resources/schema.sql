@@ -1,40 +1,48 @@
--- Enable vector extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Workflows Table (Main Entity)
 CREATE TABLE IF NOT EXISTS workflow_failures (
-    id VARCHAR(64) PRIMARY KEY,
-    repo_name VARCHAR(128) NOT NULL,
-    run_attempt INT NOT NULL,
-    raw_log TEXT,
+    id UUID PRIMARY KEY,
+    repository VARCHAR(255) NOT NULL,
+    branch VARCHAR(255) NOT NULL,
+    commit_sha VARCHAR(100) NOT NULL,
+    pipeline_id VARCHAR(100) NOT NULL,
+    raw_log TEXT NOT NULL,
     parsed_stacktrace TEXT,
     status VARCHAR(32) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    failure_category VARCHAR(100),
+    confidence_score DOUBLE PRECISION,
+    root_cause_summary TEXT,
+    remediation_steps TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
 );
 
--- Transactional Outbox Table
+CREATE INDEX IF NOT EXISTS idx_workflow_failures_status
+    ON workflow_failures (status);
+
 CREATE TABLE IF NOT EXISTS outbox_events (
     id UUID PRIMARY KEY,
-    aggregate_type VARCHAR(64) NOT NULL,
-    aggregate_id VARCHAR(64) NOT NULL,
-    event_type VARCHAR(64) NOT NULL,
+    aggregate_type VARCHAR(100) NOT NULL,
+    aggregate_id VARCHAR(100) NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
     payload TEXT NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    retry_count INT DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMP WITH TIME ZONE
+    status VARCHAR(32) NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL,
+    processed_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON outbox_events(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_events_status_created
+    ON outbox_events (status, created_at);
 
--- Knowledge Base Vector Store Table for RAG
+-- Spring AI PgVectorStore table (table-name: incident_runbooks). gen_random_uuid() is built into
+-- PostgreSQL 13+, so the uuid-ossp extension is not required.
 CREATE TABLE IF NOT EXISTS incident_runbooks (
-    id VARCHAR(36) PRIMARY KEY,
-    content TEXT NOT NULL,
-    metadata JSONB,
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    content TEXT,
+    metadata JSON,
     embedding vector(1536)
 );
 
-CREATE INDEX IF NOT EXISTS idx_runbooks_embedding ON incident_runbooks 
-USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS idx_incident_runbooks_embedding
+    ON incident_runbooks USING hnsw (embedding vector_cosine_ops);

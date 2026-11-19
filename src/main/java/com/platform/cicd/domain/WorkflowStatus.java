@@ -1,7 +1,7 @@
 package com.platform.cicd.domain;
 
 public enum WorkflowStatus {
-    RECEIVED,
+    PENDING,
     PROCESSING,
     ANALYZED,
     FAILED

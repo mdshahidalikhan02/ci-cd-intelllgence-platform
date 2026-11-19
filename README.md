@@ -1,35 +1,51 @@
 # CI/CD Failure Intelligence Platform
 
-An AI-powered diagnostic engine built with Java 21, Spring Boot 3, Spring AI, PostgreSQL (pgvector), Apache Kafka, and GitHub Actions integration.
+Event-driven, AI-powered CI/CD root-cause analysis platform built with **Java 21**, **Spring Boot 4.1.2**, **Spring AI 2.0.1**, **Apache Kafka 4.2.0**, and **PostgreSQL 16 (`pgvector`)**.
 
-## Getting Started
+## Architecture Overview
+1. **Webhook Ingestion (`POST /api/v1/webhooks/failures`)**: Atomically persists the `WorkflowFailure` and an `OutboxEvent` inside a single PostgreSQL transaction.
+2. **Transactional Outbox Relay (`OutboxPublisherScheduler`)**: Polls `PENDING` outbox records and publishes events to Kafka (`cicd.failure.events`) with retry and dead-letter handling.
+3. **RAG + LLM Diagnostic Pipeline (`FailureEventConsumer` -> `RunbookRetrievalService` -> `DiagnosticEngine`)**: Retrieves matching historical incident runbooks via `pgvector` cosine similarity search and generates structured `FailureReport` diagnostics using Spring AI's `BeanOutputConverter`.
 
-1. Start infrastructure services:
-   ```bash
-   docker compose up -d
-   ```
+## Quick Start (Windows PowerShell)
 
-2. Build and run the Spring Boot service:
-   ```bash
-   mvn clean install
-   mvn spring-boot:run
-   ```
+```powershell
+# 1. Start PostgreSQL (port 5433) and Kafka (port 9092)
+docker compose up -d
 
-3. Trigger a sample webhook test:
-   ```bash
-   curl -X POST http://localhost:8080/api/v1/webhooks/github \
-     -H "Content-Type: application/json" \
-     -d '{
-       "action": "completed",
-       "workflow_run": {
-         "id": "run-101",
-         "name": "Build and Test",
-         "status": "completed",
-         "conclusion": "failure",
-         "run_attempt": 1,
-         "html_url": "https://github.com/example/repo/actions/runs/101",
-         "repository": { "full_name": "example/repo" },
-         "head_commit": { "id": "abc123", "message": "Fix build issue" }
-       }
-     }'
-   ```
+# 2. (Optional) Export your OpenAI API key for live embeddings & LLM diagnostics
+$env:OPENAI_API_KEY = "sk-your-key"
+
+# 3. Compile and run the application
+mvn clean spring-boot:run
+```
+
+## Sample Runbooks (RAG)
+On first startup `RunbookSeeder` indexes four sample runbooks into `incident_runbooks` (needs a real `OPENAI_API_KEY` for embeddings; with the mock key it logs a warning and continues). Disable with `app.runbooks.seed-on-startup=false`. Add your own:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/runbooks" -Method Post -ContentType "application/json" `
+  -Body '{"title":"Disk full on runner","content":"Symptom: No space left on device. Fix: prune docker images and caches."}'
+```
+
+## Tests
+`mvn clean package` runs the unit tests; the Testcontainers end-to-end test (`CicdIntelligenceIntegrationTest`) runs when Docker is available and is skipped otherwise.
+
+## Verify End-to-End Flow
+
+```powershell
+# Ingest a CI/CD failure webhook
+$res = Invoke-RestMethod -Uri "http://localhost:8080/api/v1/webhooks/failures" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{
+    "repository": "platform/payment-service",
+    "branch": "main",
+    "commitSha": "a1b2c3d4",
+    "pipelineId": "run-9042",
+    "rawLog": "Caused by: org.postgresql.util.PSQLException: FATAL: remaining connection slots are reserved for roles with the SUPERUSER attribute"
+  }'
+
+# Query the analyzed failure record
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/failures/$($res.failureId)"
+```

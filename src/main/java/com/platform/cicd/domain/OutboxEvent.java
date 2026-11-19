@@ -4,6 +4,8 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
@@ -24,37 +26,39 @@ import java.util.UUID;
 public class OutboxEvent {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "aggregate_type", nullable = false)
+    @Column(name = "aggregate_type", nullable = false, length = 100)
     private String aggregateType;
 
-    @Column(name = "aggregate_id", nullable = false)
+    @Column(name = "aggregate_id", nullable = false, length = 100)
     private String aggregateId;
 
-    @Column(name = "event_type", nullable = false)
+    @Column(name = "event_type", nullable = false, length = 100)
     private String eventType;
 
     @Column(name = "payload", nullable = false, columnDefinition = "TEXT")
     private String payload;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false)
+    @Column(name = "status", nullable = false, length = 32)
     private OutboxStatus status;
 
-    @Column(name = "retry_count")
-    private Integer retryCount;
+    @Column(name = "retry_count", nullable = false)
+    @Builder.Default
+    private Integer retryCount = 0;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
     @Column(name = "processed_at")
     private OffsetDateTime processedAt;
 
     @PrePersist
-    public void onPrePersist() {
-        if (this.id == null) {
-            this.id = UUID.randomUUID();
+    void onCreate() {
+        if (this.createdAt == null) {
+            this.createdAt = OffsetDateTime.now();
         }
         if (this.status == null) {
             this.status = OutboxStatus.PENDING;
@@ -62,6 +66,5 @@ public class OutboxEvent {
         if (this.retryCount == null) {
             this.retryCount = 0;
         }
-        this.createdAt = OffsetDateTime.now();
     }
 }

@@ -6,7 +6,6 @@ import com.platform.cicd.repository.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -14,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Component
@@ -24,42 +24,48 @@ public class OutboxPublisherScheduler {
     private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Value("${app.kafka.topics.failure-events}")
-    private String topicName;
+    private String failureEventsTopic;
 
-    @Scheduled(fixedDelay = 3000)
+    @Value("${app.outbox.max-retries:3}")
+    private int maxRetries;
+
+    @Scheduled(fixedDelayString = "${app.outbox.poll-interval-ms:2000}")
     @Transactional
     public void publishPendingOutboxEvents() {
-        List<OutboxEvent> pendingEvents = outboxEventRepository.findByStatusOrderByCreatedAtAsc(
-                OutboxStatus.PENDING, PageRequest.of(0, 50)
-        );
+        List<OutboxEvent> pendingEvents =
+                outboxEventRepository.findTop50ByStatusOrderByCreatedAtAsc(OutboxStatus.PENDING);
 
         if (pendingEvents.isEmpty()) {
             return;
         }
 
-        log.info("Found {} pending outbox events for publishing to Kafka", pendingEvents.size());
+        log.debug("Found {} pending outbox events to relay", pendingEvents.size());
 
         for (OutboxEvent event : pendingEvents) {
             try {
-                kafkaTemplate.send(topicName, event.getAggregateId(), event.getPayload())
-                        .whenComplete((result, ex) -> {
-                            if (ex == null) {
-                                log.info("Successfully published outbox event {} to topic {}", event.getId(), topicName);
-                            } else {
-                                log.error("Failed to publish outbox event {}", event.getId(), ex);
-                            }
-                        });
+                kafkaTemplate.send(failureEventsTopic, event.getAggregateId(), event.getPayload())
+                        .get(5, TimeUnit.SECONDS);
 
                 event.setStatus(OutboxStatus.PROCESSED);
                 event.setProcessedAt(OffsetDateTime.now());
-            } catch (Exception e) {
-                log.error("Exception handling outbox event publishing for ID: {}", event.getId(), e);
-                event.setRetryCount(event.getRetryCount() + 1);
-                if (event.getRetryCount() >= 3) {
+                log.info("Published OutboxEvent id={} to topic={}", event.getId(), failureEventsTopic);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.warn("Outbox relay interrupted; remaining events stay PENDING");
+                outboxEventRepository.save(event);
+                return;
+            } catch (Exception ex) {
+                int updatedRetries = (event.getRetryCount() == null ? 0 : event.getRetryCount()) + 1;
+                event.setRetryCount(updatedRetries);
+                log.error("Failed to publish OutboxEvent id={} (attempt {}/{})",
+                        event.getId(), updatedRetries, maxRetries, ex);
+
+                if (updatedRetries >= maxRetries) {
                     event.setStatus(OutboxStatus.FAILED);
+                    log.error("OutboxEvent id={} exceeded max retries and moved to FAILED", event.getId());
                 }
             }
+            outboxEventRepository.save(event);
         }
-        outboxEventRepository.saveAll(pendingEvents);
     }
 }
